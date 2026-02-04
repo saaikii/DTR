@@ -1,5 +1,5 @@
 {
   "name": "Smart Excel DTR",
-  "description": "An intelligent Daily Time Record template with Excel-like functionality, automatic hour calculations, weekly caps, and AI-powered natural language time entry.",
+  "description": "A Daily Time Record template with Excel-like functionality, automatic hour calculations, and weekly caps.",
   "requestFramePermissions": []
 }

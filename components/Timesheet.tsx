@@ -21,6 +21,13 @@ const Timesheet: React.FC<TimesheetProps> = ({ entries, onUpdateEntry, onClearEn
   }, [entries]);
 
   const handleSetTime = (id: string, field: keyof TimeEntry) => {
+    // Automatically set Afternoon Out to 5:00 PM (17:00)
+    if (field === 'afternoonOut') {
+      onUpdateEntry(id, field, '17:00');
+      return;
+    }
+
+    // For other fields, use the current time
     const now = new Date();
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
@@ -55,6 +62,9 @@ const Timesheet: React.FC<TimesheetProps> = ({ entries, onUpdateEntry, onClearEn
             </th>
             <th scope="col" className="px-3 py-3.5 text-right text-xs font-bold text-indigo-900 bg-indigo-50 border-l border-indigo-100 w-28">
               Daily Total
+            </th>
+            <th scope="col" className="px-3 py-3.5 text-left text-xs font-semibold text-gray-900 border-l border-gray-200 min-w-[200px]">
+              Notes
             </th>
             <th scope="col" className="px-3 py-3.5 text-center text-xs font-semibold text-gray-900 w-16">
               Actions
@@ -170,6 +180,18 @@ const Timesheet: React.FC<TimesheetProps> = ({ entries, onUpdateEntry, onClearEn
                      <span className="text-[10px] text-gray-400 block leading-tight">Cap: 8.00</span>
                   )}
                 </td>
+
+                {/* Notes Input */}
+                <td className="px-2 py-2 border-l border-gray-200">
+                   <input
+                      type="text"
+                      value={entry.notes || ''}
+                      onChange={(e) => onUpdateEntry(entry.id, 'notes', e.target.value)}
+                      placeholder="Task details..."
+                      className="block w-full rounded-md border-gray-300 py-1.5 text-gray-900 bg-white shadow-sm focus:ring-2 focus:ring-indigo-600 sm:text-xs"
+                   />
+                </td>
+
                 <td className="whitespace-nowrap px-3 py-2 text-center">
                     <button 
                         onClick={() => onClearEntry(entry.id)}

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import Timesheet from './components/Timesheet';
 import Summary from './components/Summary';
+import SmartEntry from './components/SmartEntry';
 import { TimeEntry } from './types';
 import { getWeekDays, calculateDailyHours } from './utils/timeUtils';
 import { CalendarDaysIcon, DocumentArrowDownIcon, UserIcon, BuildingOfficeIcon } from '@heroicons/react/24/outline';
@@ -10,6 +11,7 @@ const App: React.FC = () => {
   // Initialize with current week
   const [entries, setEntries] = useState<TimeEntry[]>(() => getWeekDays(new Date()));
   const [userInfo, setUserInfo] = useState({ name: '', office: '' });
+  const [isNewWeek, setIsNewWeek] = useState(false);
 
   // Auto-save/load entries
   useEffect(() => {
@@ -18,7 +20,18 @@ const App: React.FC = () => {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-           setEntries(parsed);
+           // Check if the saved data belongs to the current week
+           const currentWeekData = getWeekDays(new Date());
+           const currentWeekStart = currentWeekData[0].date;
+           const savedWeekStart = parsed[0].date;
+
+           if (currentWeekStart === savedWeekStart) {
+             setEntries(parsed);
+           } else {
+             // Logic for new week: 
+             // We do NOT load the old entries, effectively starting fresh.
+             setIsNewWeek(true);
+           }
         }
       } catch (e) {
         console.error("Failed to load saved entries");
@@ -48,6 +61,8 @@ const App: React.FC = () => {
     setEntries(prev => prev.map(entry => 
       entry.id === id ? { ...entry, [field]: value } : entry
     ));
+    // Clear the "New Week" notification if user starts editing
+    if (isNewWeek) setIsNewWeek(false);
   };
 
   const handleClearEntry = (id: string) => {
@@ -56,9 +71,33 @@ const App: React.FC = () => {
       ));
   };
 
+  const handleSmartFill = (parsedEntries: Partial<TimeEntry>[]) => {
+    setEntries(prevEntries => {
+        const newEntries = [...prevEntries];
+        parsedEntries.forEach(parsed => {
+            if (parsed.date) {
+                const idx = newEntries.findIndex(e => e.date === parsed.date);
+                if (idx >= 0) {
+                    // Update existing entry while preserving ID
+                    newEntries[idx] = { 
+                        ...newEntries[idx], 
+                        ...parsed, 
+                        id: newEntries[idx].id 
+                    };
+                }
+            }
+        });
+        return newEntries;
+    });
+    if (isNewWeek) setIsNewWeek(false);
+  };
+
   const handleReset = () => {
     if(window.confirm("Are you sure you want to reset all entries for this week?")) {
-        setEntries(getWeekDays(new Date()));
+        // Force generate new days for the current week
+        const freshEntries = getWeekDays(new Date());
+        setEntries(freshEntries);
+        setIsNewWeek(false);
     }
   };
 
@@ -74,7 +113,7 @@ const App: React.FC = () => {
       ];
       const headerRow = [
         "Date", "Morning In", "Morning Out", "Afternoon In", "Afternoon Out", 
-        "AM Hours", "PM Hours", "Total Hours", "Credited (Max 8)"
+        "AM Hours", "PM Hours", "Total Hours", "Credited (Max 8)", "Notes"
       ];
 
       // Calculate Data and Totals
@@ -95,18 +134,18 @@ const App: React.FC = () => {
           stats.morningHours || 0,
           stats.afternoonHours || 0,
           stats.dailyTotalActual || 0,
-          stats.dailyTotalCredited || 0
+          stats.dailyTotalCredited || 0,
+          e.notes || ""
         ];
       });
 
       const finalWeeklyCredited = Math.min(totalCreditedSum, 40);
 
-      // Summary Rows (Aligned to the right columns)
-      // We use empty strings to push the labels to column G (index 6) and H (index 7)
-      const summaryHeaderRow = ["", "", "", "", "", "", "WEEKLY SUMMARY", "", ""];
-      const summaryActualRow = ["", "", "", "", "", "", "Total Actual:", totalActual.toFixed(2), ""];
-      const summaryCreditedRow = ["", "", "", "", "", "", "Total Credited:", totalCreditedSum.toFixed(2), ""];
-      const summaryFinalRow = ["", "", "", "", "", "", "FINAL (Max 40h):", finalWeeklyCredited.toFixed(2), ""];
+      // Summary Rows
+      const summaryHeaderRow = ["", "", "", "", "", "", "WEEKLY SUMMARY", "", "", ""];
+      const summaryActualRow = ["", "", "", "", "", "", "Total Actual:", totalActual.toFixed(2), "", ""];
+      const summaryCreditedRow = ["", "", "", "", "", "", "Total Credited:", totalCreditedSum.toFixed(2), "", ""];
+      const summaryFinalRow = ["", "", "", "", "", "", "FINAL (Max 40h):", finalWeeklyCredited.toFixed(2), "", ""];
 
       // Assemble all data
       const wsData = [
@@ -125,121 +164,101 @@ const App: React.FC = () => {
       const ws = XLSX.utils.aoa_to_sheet(wsData);
 
       // --- Styling ---
-      const range = XLSX.utils.decode_range(ws['!ref'] || "A1:A1");
-
-      // Styles Definitions
       const borderAll = {
-          top: { style: "thin", color: { rgb: "D1D5DB" } },
-          bottom: { style: "thin", color: { rgb: "D1D5DB" } },
-          left: { style: "thin", color: { rgb: "D1D5DB" } },
-          right: { style: "thin", color: { rgb: "D1D5DB" } }
+          top: { style: "thin", color: { rgb: "E5E7EB" } },
+          bottom: { style: "thin", color: { rgb: "E5E7EB" } },
+          left: { style: "thin", color: { rgb: "E5E7EB" } },
+          right: { style: "thin", color: { rgb: "E5E7EB" } }
       };
 
-      const styleTitle = {
-          font: { bold: true, sz: 16, color: { rgb: "4338CA" } }, // Indigo-700
-          alignment: { horizontal: "center", vertical: "center" }
-      };
+      const fontBase = { name: "Arial", sz: 12, color: { rgb: "1F2937" } };
+      const fontBold = { name: "Arial", sz: 12, bold: true, color: { rgb: "111827" } };
+      const fontHeader = { name: "Arial", sz: 12, bold: true, color: { rgb: "FFFFFF" } };
+      const fontTitle = { name: "Arial", sz: 24, bold: true, color: { rgb: "4338CA" } };
+      const fontInfoLabel = { name: "Arial", sz: 14, bold: true, color: { rgb: "374151" } };
+      const fontInfoValue = { name: "Arial", sz: 14, color: { rgb: "111827" } };
+      const fontWarning = { name: "Arial", sz: 12, bold: true, color: { rgb: "92400E" } };
 
-      const styleLabel = {
-          font: { bold: true, color: { rgb: "374151" } } // Gray-700
-      };
+      const fillHeader = { fgColor: { rgb: "4F46E5" } }; // Indigo-600
+      const fillOdd = { fgColor: { rgb: "F9FAFB" } }; // Gray-50
+      const fillEven = { fgColor: { rgb: "FFFFFF" } }; // White
+      const fillWarning = { fgColor: { rgb: "FEF3C7" } }; // Amber-100
+      const fillTitle = { fgColor: { rgb: "EEF2FF" } }; // Indigo-50
+      const fillFinal = { fgColor: { rgb: "059669" } }; // Emerald-600
 
-      const styleInput = {
-          font: { color: { rgb: "111827" } },
-          alignment: { horizontal: "left" },
-          border: { bottom: { style: "thin", color: { rgb: "D1D5DB" } } }
-      };
+      // Styles
+      const styleTitle = { font: fontTitle, alignment: { horizontal: "center", vertical: "center" }, fill: fillTitle };
+      const styleHeader = { font: fontHeader, fill: fillHeader, alignment: { horizontal: "center", vertical: "center" }, border: borderAll };
+      const styleInfoLabel = { font: fontInfoLabel, alignment: { horizontal: "left", vertical: "center" } };
+      const styleInfoValue = { font: fontInfoValue, alignment: { horizontal: "left", vertical: "center" }, border: { bottom: { style: "thin", color: { rgb: "D1D5DB" } } } };
 
-      const styleHeader = {
-          font: { bold: true, color: { rgb: "FFFFFF" } },
-          fill: { fgColor: { rgb: "4F46E5" } }, // Indigo-600
-          alignment: { horizontal: "center", vertical: "center" },
+      const styleSummaryLabel = { font: fontInfoLabel, alignment: { horizontal: "right", vertical: "center" } };
+      const styleSummaryValue = { font: { ...fontBold, sz: 14 }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll };
+      const styleFinalValue = { font: { ...fontBold, sz: 14, color: { rgb: "FFFFFF" } }, fill: fillFinal, alignment: { horizontal: "center", vertical: "center" }, border: borderAll };
+
+      // Helper for data rows
+      const getDataStyle = (align: string, isBold: boolean, isOdd: boolean, isWarning: boolean) => ({
+          font: isWarning ? fontWarning : (isBold ? fontBold : fontBase),
+          fill: isWarning ? fillWarning : (isOdd ? fillOdd : fillEven),
+          alignment: { horizontal: align, vertical: "center" },
           border: borderAll
-      };
+      });
 
-      const styleCellCenter = {
-          border: borderAll,
-          alignment: { horizontal: "center", vertical: "center" }
-      };
-
-      const styleCellLeft = {
-          border: borderAll,
-          alignment: { horizontal: "left", vertical: "center" },
-          font: { bold: true, color: { rgb: "374151" } }
-      };
-
-      const styleCellWarning = {
-          border: borderAll,
-          alignment: { horizontal: "center", vertical: "center" },
-          font: { color: { rgb: "B45309" } }, // Amber-700
-          fill: { fgColor: { rgb: "FEF3C7" } } // Amber-100
-      };
-
-      const styleSummaryLabel = {
-        font: { bold: true, color: { rgb: "374151" } },
-        alignment: { horizontal: "right", vertical: "center" }
-      };
-
-      const styleSummaryValue = {
-        font: { bold: true },
-        alignment: { horizontal: "center", vertical: "center" },
-        border: borderAll
-      };
-
-      const styleFinalValue = {
-        font: { bold: true, color: { rgb: "FFFFFF" } },
-        fill: { fgColor: { rgb: "059669" } }, // Emerald-600
-        alignment: { horizontal: "center", vertical: "center" },
-        border: borderAll
-      };
-
-      // 1. Apply Title (A1)
+      // 1. Apply Title
       if(!ws['!merges']) ws['!merges'] = [];
-      ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: 8 } }); // Merge Title
+      ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } }); // Merged to column 9 (J)
       if(ws['A1']) ws['A1'].s = styleTitle;
 
       // 2. Apply Info Section
-      if(ws['A3']) ws['A3'].s = styleLabel;
-      if(ws['B3']) ws['B3'].s = styleInput;
-      if(ws['A4']) ws['A4'].s = styleLabel;
-      if(ws['B4']) ws['B4'].s = styleInput;
+      if(ws['A3']) ws['A3'].s = styleInfoLabel;
+      if(ws['B3']) ws['B3'].s = styleInfoValue;
+      if(ws['A4']) ws['A4'].s = styleInfoLabel;
+      if(ws['B4']) ws['B4'].s = styleInfoValue;
 
-      // 3. Apply Header Style (Row 5 / Index 5)
-      for(let C = 0; C <= 8; C++) {
+      // 3. Apply Header Style
+      for(let C = 0; C <= 9; C++) {
           const cellRef = XLSX.utils.encode_cell({r: 5, c: C});
           if(!ws[cellRef]) ws[cellRef] = { v: "", t: "s" };
           ws[cellRef].s = styleHeader;
       }
 
-      // 4. Apply Data Styles (Row 6 to End of Data)
+      // 4. Apply Data Styles with Alternating Colors
       const lastDataRowIndex = 5 + dataRows.length;
       
       for(let R = 6; R <= lastDataRowIndex; R++) {
-          // Check for daily cap exceed
+          const rowIndex = R - 6;
+          const isOdd = rowIndex % 2 !== 0;
+          
           let isOvertime = false;
           const totalRef = XLSX.utils.encode_cell({r: R, c: 7});
           if (ws[totalRef] && typeof ws[totalRef].v === 'number' && ws[totalRef].v > 8) {
               isOvertime = true;
           }
 
-          for(let C = 0; C <= 8; C++) {
+          for(let C = 0; C <= 9; C++) {
               const cellRef = XLSX.utils.encode_cell({r: R, c: C});
               if(!ws[cellRef]) ws[cellRef] = { v: "", t: "s" };
 
               if (C === 0) {
-                  ws[cellRef].s = styleCellLeft; 
+                  // Date
+                  ws[cellRef].s = getDataStyle("left", true, isOdd, false);
+              } else if (C === 7) {
+                  // Total Hours (Bold)
+                  ws[cellRef].s = getDataStyle("center", true, isOdd, false); // Bold total actual
               } else if (C === 8 && isOvertime) {
-                  ws[cellRef].s = styleCellWarning;
+                  // Credited Hours Warning
+                  ws[cellRef].s = getDataStyle("center", true, isOdd, true);
+              } else if (C === 9) {
+                  // Notes
+                  ws[cellRef].s = getDataStyle("left", false, isOdd, false);
               } else {
-                  ws[cellRef].s = styleCellCenter;
+                  // Normal Times
+                  ws[cellRef].s = getDataStyle("center", false, isOdd, false);
               }
           }
       }
 
       // 5. Apply Summary Styles
-      // The summary rows start after: Title(1) + Spacer(1) + Info(2) + Spacer(1) + Header(1) + Data(N) + Spacer(1)
-      // Which corresponds to index: 1 + 1 + 2 + 1 + 1 + N + 1 = 7 + N.
-      // Or simply: lastDataRowIndex + 2 (because of 1 spacer row).
       const startSummaryRow = lastDataRowIndex + 2;
 
       // Row: Total Actual
@@ -260,23 +279,42 @@ const App: React.FC = () => {
       if(ws[labelFinal]) ws[labelFinal].s = styleSummaryLabel;
       if(ws[valFinal]) ws[valFinal].s = styleFinalValue;
 
+      // Row Heights (hpt)
+      ws['!rows'] = [
+          { hpt: 45 }, // Title
+          { hpt: 15 }, // Spacer
+          { hpt: 25 }, // Name
+          { hpt: 25 }, // Office
+          { hpt: 15 }, // Spacer
+          { hpt: 30 }, // Header
+      ];
+      // Add dynamic row heights for data
+      for (let i = 0; i < dataRows.length; i++) {
+        ws['!rows'].push({ hpt: 25 });
+      }
+      // Add spacer and summary row heights
+      ws['!rows'].push({ hpt: 20 }); // Spacer
+      ws['!rows'].push({ hpt: 15 }); // Spacer
+      ws['!rows'].push({ hpt: 30 }); // Summary 1
+      ws['!rows'].push({ hpt: 30 }); // Summary 2
+      ws['!rows'].push({ hpt: 30 }); // Summary 3
 
       // Column Widths
       ws['!cols'] = [
-        { wch: 18 }, // Date
-        { wch: 12 }, // Morning In
-        { wch: 12 }, // Morning Out
-        { wch: 12 }, // Afternoon In
-        { wch: 12 }, // Afternoon Out
-        { wch: 10 }, // AM Hours
-        { wch: 10 }, // PM Hours
-        { wch: 20 }, // Daily Total / Summary Labels
-        { wch: 20 }  // Credited Hours / Summary Values
+        { wch: 22 }, // Date
+        { wch: 14 }, // AM In
+        { wch: 14 }, // AM Out
+        { wch: 14 }, // PM In
+        { wch: 14 }, // PM Out
+        { wch: 12 }, // AM Hrs
+        { wch: 12 }, // PM Hrs
+        { wch: 15 }, // Total
+        { wch: 18 }, // Credited
+        { wch: 40 }  // Notes
       ];
 
       XLSX.utils.book_append_sheet(wb, ws, "Timesheet");
 
-      // Save file
       const fileName = userInfo.name ? `${userInfo.name.replace(/\s+/g, '_')}_DTR.xlsx` : "Timesheet.xlsx";
       XLSX.writeFile(wb, fileName);
   };
@@ -297,6 +335,11 @@ const App: React.FC = () => {
               </div>
             </div>
             <div className="flex items-center gap-3">
+                {isNewWeek && (
+                  <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-full font-medium animate-pulse">
+                     New Week Started
+                  </span>
+                )}
                 <button 
                     onClick={handleReset}
                     className="text-sm text-gray-500 hover:text-red-600 px-3 py-2 transition-colors"
@@ -356,6 +399,11 @@ const App: React.FC = () => {
                         </div>
                     </div>
                 </div>
+
+                <SmartEntry 
+                  currentDate={entries[0]?.date || new Date().toISOString().split('T')[0]} 
+                  onEntriesParsed={handleSmartFill} 
+                />
 
                 {/* Timesheet Table */}
                 <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
