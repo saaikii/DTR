@@ -80,35 +80,47 @@ export const calculateDailyHours = (entry: TimeEntry): CalculatedHours => {
 };
 
 export const formatDecimalHours = (hours: number): string => {
-  return hours > 0 ? hours.toFixed(2) : '-';
+  return hours > 0 ? hours.toFixed(2) : '';
 };
 
 export const generateId = (): string => {
     return Math.random().toString(36).substring(2, 15);
 }
 
-export const getWeekDays = (startDate: Date): TimeEntry[] => {
+// Generates 13 weeks (65 working days) starting from the given date
+export const generateMonthEntries = (startDate: Date): TimeEntry[] => {
     const entries: TimeEntry[] = [];
     const current = new Date(startDate);
     
-    // Adjust to Monday
-    const day = current.getDay();
-    const diff = current.getDate() - day + (day === 0 ? -6 : 1);
-    const monday = new Date(current.setDate(diff));
+    // Set to noon to avoid DST/midnight edge cases affecting the date calculation
+    current.setHours(12, 0, 0, 0);
 
-    // Only generate 5 days (Mon-Fri)
-    for (let i = 0; i < 5; i++) {
-        const d = new Date(monday);
-        d.setDate(monday.getDate() + i);
-        entries.push({
-            id: generateId(),
-            date: d.toISOString().split('T')[0],
-            morningIn: '',
-            morningOut: '',
-            afternoonIn: '',
-            afternoonOut: '',
-            notes: ''
-        });
+    // Generate 13 weeks (65 days)
+    for (let w = 0; w < 13; w++) {
+        for (let d = 0; d < 5; d++) {
+             const date = new Date(current);
+             date.setDate(current.getDate() + (w * 7) + d);
+             
+             const year = date.getFullYear();
+             const month = String(date.getMonth() + 1).padStart(2, '0');
+             const dayStr = String(date.getDate()).padStart(2, '0');
+             const localDateStr = `${year}-${month}-${dayStr}`;
+
+             entries.push({
+                id: generateId(),
+                date: localDateStr,
+                morningIn: '',
+                morningOut: '',
+                afternoonIn: '',
+                afternoonOut: '',
+                notes: ''
+             });
+        }
     }
     return entries;
+};
+
+// Keep for compatibility if needed
+export const getWeekDays = (startDate: Date): TimeEntry[] => {
+    return generateMonthEntries(startDate);
 };

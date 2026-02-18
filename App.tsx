@@ -1,17 +1,28 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import Timesheet from './components/Timesheet';
 import Summary from './components/Summary';
 import SmartEntry from './components/SmartEntry';
 import { TimeEntry } from './types';
-import { getWeekDays, calculateDailyHours } from './utils/timeUtils';
-import { CalendarDaysIcon, DocumentArrowDownIcon, UserIcon, BuildingOfficeIcon } from '@heroicons/react/24/outline';
+import { generateMonthEntries, calculateDailyHours } from './utils/timeUtils';
+import { 
+  CalendarDaysIcon, 
+} from '@heroicons/react/24/outline';
 import XLSX from 'xlsx';
 
 const App: React.FC = () => {
-  // Initialize with current week
-  const [entries, setEntries] = useState<TimeEntry[]>(() => getWeekDays(new Date()));
+  // Initialize starting specifically from January 19 of the current year
+  const [entries, setEntries] = useState<TimeEntry[]>(() => {
+    const start = new Date();
+    start.setMonth(0); // January
+    start.setDate(19);
+    return generateMonthEntries(start);
+  });
   const [userInfo, setUserInfo] = useState({ name: '', office: '' });
+  const [targetHours, setTargetHours] = useState(486); // Default from image
   const [isNewWeek, setIsNewWeek] = useState(false);
+  const [isInitialized, setIsInitialized] = useState(false);
+  
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Auto-save/load entries
   useEffect(() => {
@@ -20,28 +31,26 @@ const App: React.FC = () => {
       try {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-           // Check if the saved data belongs to the current week
-           const currentWeekData = getWeekDays(new Date());
-           const currentWeekStart = currentWeekData[0].date;
-           const savedWeekStart = parsed[0].date;
-
-           if (currentWeekStart === savedWeekStart) {
-             setEntries(parsed);
-           } else {
-             // Logic for new week: 
-             // We do NOT load the old entries, effectively starting fresh.
-             setIsNewWeek(true);
-           }
+           setEntries(parsed);
         }
       } catch (e) {
         console.error("Failed to load saved entries");
       }
     }
+    // Load target hours
+    const savedTarget = localStorage.getItem('dtr-target-hours');
+    if (savedTarget) setTargetHours(Number(savedTarget));
+    
+    setIsInitialized(true);
   }, []);
 
+  // Save entries ONLY after initialization is complete
   useEffect(() => {
-    localStorage.setItem('dtr-entries', JSON.stringify(entries));
-  }, [entries]);
+    if (isInitialized) {
+        localStorage.setItem('dtr-entries', JSON.stringify(entries));
+        localStorage.setItem('dtr-target-hours', String(targetHours));
+    }
+  }, [entries, targetHours, isInitialized]);
 
   // Auto-save/load user info
   useEffect(() => {
@@ -61,7 +70,6 @@ const App: React.FC = () => {
     setEntries(prev => prev.map(entry => 
       entry.id === id ? { ...entry, [field]: value } : entry
     ));
-    // Clear the "New Week" notification if user starts editing
     if (isNewWeek) setIsNewWeek(false);
   };
 
@@ -78,7 +86,6 @@ const App: React.FC = () => {
             if (parsed.date) {
                 const idx = newEntries.findIndex(e => e.date === parsed.date);
                 if (idx >= 0) {
-                    // Update existing entry while preserving ID
                     newEntries[idx] = { 
                         ...newEntries[idx], 
                         ...parsed, 
@@ -93,264 +100,311 @@ const App: React.FC = () => {
   };
 
   const handleReset = () => {
-    if(window.confirm("Are you sure you want to reset all entries for this week?")) {
-        // Force generate new days for the current week
-        const freshEntries = getWeekDays(new Date());
+    if(window.confirm("Are you sure you want to reset all entries? This will start a new schedule from January 19.")) {
+        const start = new Date();
+        start.setMonth(0); // January
+        start.setDate(19);
+        const freshEntries = generateMonthEntries(start);
         setEntries(freshEntries);
         setIsNewWeek(false);
     }
   };
 
+  // --- Backup / Restore Functions ---
+
+  const saveBackup = () => {
+    const backup = {
+      version: 1,
+      timestamp: new Date().toISOString(),
+      userInfo,
+      targetHours,
+      entries
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `DTR_Backup_${userInfo.name ? userInfo.name.replace(/\s+/g, '_') : 'My'}_${new Date().toISOString().split('T')[0]}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const loadBackup = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const content = e.target?.result as string;
+        const parsed = JSON.parse(content);
+        
+        if (parsed.entries && Array.isArray(parsed.entries)) {
+             setEntries(parsed.entries);
+        }
+        if (parsed.userInfo) setUserInfo(parsed.userInfo);
+        if (parsed.targetHours) setTargetHours(parsed.targetHours);
+
+        alert("Backup loaded successfully!");
+      } catch (err) {
+        console.error(err);
+        alert("Failed to load backup file. Invalid format.");
+      }
+    };
+    reader.readAsText(file);
+    event.target.value = '';
+  };
+
   const exportToExcel = () => {
       const wb = XLSX.utils.book_new();
-
-      // Data Arrays
-      const titleRow = [["DAILY TIME RECORD"]];
-      const spacer = [[""]];
-      const infoRows = [
-          ["Employee Name:", userInfo.name],
-          ["Office / Dept:", userInfo.office]
-      ];
-      const headerRow = [
-        "Date", "Morning In", "Morning Out", "Afternoon In", "Afternoon Out", 
-        "AM Hours", "PM Hours", "Total Hours", "Credited (Max 8)", "Notes"
-      ];
-
-      // Calculate Data and Totals
-      let totalActual = 0;
-      let totalCreditedSum = 0;
-
-      const dataRows = entries.map(e => {
-        const stats = calculateDailyHours(e);
-        totalActual += stats.dailyTotalActual;
-        totalCreditedSum += stats.dailyTotalCredited;
-
-        return [
-          e.date,
-          e.morningIn,
-          e.morningOut,
-          e.afternoonIn,
-          e.afternoonOut,
-          stats.morningHours || 0,
-          stats.afternoonHours || 0,
-          stats.dailyTotalActual || 0,
-          stats.dailyTotalCredited || 0,
-          e.notes || ""
-        ];
-      });
-
-      const finalWeeklyCredited = Math.min(totalCreditedSum, 40);
-
-      // Summary Rows
-      const summaryHeaderRow = ["", "", "", "", "", "", "WEEKLY SUMMARY", "", "", ""];
-      const summaryActualRow = ["", "", "", "", "", "", "Total Actual:", totalActual.toFixed(2), "", ""];
-      const summaryCreditedRow = ["", "", "", "", "", "", "Total Credited:", totalCreditedSum.toFixed(2), "", ""];
-      const summaryFinalRow = ["", "", "", "", "", "", "FINAL (Max 40h):", finalWeeklyCredited.toFixed(2), "", ""];
-
-      // Assemble all data
-      const wsData = [
-          ...titleRow,
-          ...spacer,
-          ...infoRows,
-          ...spacer,
-          headerRow,
-          ...dataRows,
-          ...spacer,
-          summaryActualRow,
-          summaryCreditedRow,
-          summaryFinalRow
-      ];
-
-      const ws = XLSX.utils.aoa_to_sheet(wsData);
-
-      // --- Styling ---
-      const borderAll = {
-          top: { style: "thin", color: { rgb: "E5E7EB" } },
-          bottom: { style: "thin", color: { rgb: "E5E7EB" } },
-          left: { style: "thin", color: { rgb: "E5E7EB" } },
-          right: { style: "thin", color: { rgb: "E5E7EB" } }
+      
+      // -- STYLES --
+      const borderStyle = {
+        top: { style: "thin", color: { rgb: "000000" } },
+        bottom: { style: "thin", color: { rgb: "000000" } },
+        left: { style: "thin", color: { rgb: "000000" } },
+        right: { style: "thin", color: { rgb: "000000" } }
       };
 
-      const fontBase = { name: "Arial", sz: 12, color: { rgb: "1F2937" } };
-      const fontBold = { name: "Arial", sz: 12, bold: true, color: { rgb: "111827" } };
-      const fontHeader = { name: "Arial", sz: 12, bold: true, color: { rgb: "FFFFFF" } };
-      const fontTitle = { name: "Arial", sz: 24, bold: true, color: { rgb: "4338CA" } };
-      const fontInfoLabel = { name: "Arial", sz: 14, bold: true, color: { rgb: "374151" } };
-      const fontInfoValue = { name: "Arial", sz: 14, color: { rgb: "111827" } };
-      const fontWarning = { name: "Arial", sz: 12, bold: true, color: { rgb: "92400E" } };
+      const titleStyle = {
+          font: { bold: true, sz: 20, name: "Arial" }, // Increased size
+          alignment: { horizontal: "center", vertical: "center" }
+      };
 
-      const fillHeader = { fgColor: { rgb: "4F46E5" } }; // Indigo-600
-      const fillOdd = { fgColor: { rgb: "F9FAFB" } }; // Gray-50
-      const fillEven = { fgColor: { rgb: "FFFFFF" } }; // White
-      const fillWarning = { fgColor: { rgb: "FEF3C7" } }; // Amber-100
-      const fillTitle = { fgColor: { rgb: "EEF2FF" } }; // Indigo-50
-      const fillFinal = { fgColor: { rgb: "059669" } }; // Emerald-600
-
-      // Styles
-      const styleTitle = { font: fontTitle, alignment: { horizontal: "center", vertical: "center" }, fill: fillTitle };
-      const styleHeader = { font: fontHeader, fill: fillHeader, alignment: { horizontal: "center", vertical: "center" }, border: borderAll };
-      const styleInfoLabel = { font: fontInfoLabel, alignment: { horizontal: "left", vertical: "center" } };
-      const styleInfoValue = { font: fontInfoValue, alignment: { horizontal: "left", vertical: "center" }, border: { bottom: { style: "thin", color: { rgb: "D1D5DB" } } } };
-
-      const styleSummaryLabel = { font: fontInfoLabel, alignment: { horizontal: "right", vertical: "center" } };
-      const styleSummaryValue = { font: { ...fontBold, sz: 14 }, alignment: { horizontal: "center", vertical: "center" }, border: borderAll };
-      const styleFinalValue = { font: { ...fontBold, sz: 14, color: { rgb: "FFFFFF" } }, fill: fillFinal, alignment: { horizontal: "center", vertical: "center" }, border: borderAll };
-
-      // Helper for data rows
-      const getDataStyle = (align: string, isBold: boolean, isOdd: boolean, isWarning: boolean) => ({
-          font: isWarning ? fontWarning : (isBold ? fontBold : fontBase),
-          fill: isWarning ? fillWarning : (isOdd ? fillOdd : fillEven),
-          alignment: { horizontal: align, vertical: "center" },
-          border: borderAll
-      });
-
-      // 1. Apply Title
-      if(!ws['!merges']) ws['!merges'] = [];
-      ws['!merges'].push({ s: { r: 0, c: 0 }, e: { r: 0, c: 9 } }); // Merged to column 9 (J)
-      if(ws['A1']) ws['A1'].s = styleTitle;
-
-      // 2. Apply Info Section
-      if(ws['A3']) ws['A3'].s = styleInfoLabel;
-      if(ws['B3']) ws['B3'].s = styleInfoValue;
-      if(ws['A4']) ws['A4'].s = styleInfoLabel;
-      if(ws['B4']) ws['B4'].s = styleInfoValue;
-
-      // 3. Apply Header Style
-      for(let C = 0; C <= 9; C++) {
-          const cellRef = XLSX.utils.encode_cell({r: 5, c: C});
-          if(!ws[cellRef]) ws[cellRef] = { v: "", t: "s" };
-          ws[cellRef].s = styleHeader;
-      }
-
-      // 4. Apply Data Styles with Alternating Colors
-      const lastDataRowIndex = 5 + dataRows.length;
+      const labelStyle = {
+          font: { bold: true, sz: 14, name: "Arial" }, // Increased size
+          alignment: { horizontal: "left", vertical: "center" }
+      };
       
-      for(let R = 6; R <= lastDataRowIndex; R++) {
-          const rowIndex = R - 6;
-          const isOdd = rowIndex % 2 !== 0;
+      const valueStyle = {
+          font: { sz: 14, name: "Arial", underline: true }, // Increased size
+          alignment: { horizontal: "left", vertical: "center" }
+      };
+
+      const headerStyle = {
+        font: { bold: true, sz: 12, name: "Arial" }, // Increased size
+        alignment: { horizontal: "center", vertical: "center", wrapText: true },
+        border: borderStyle,
+        fill: { fgColor: { rgb: "FFFFFF" } } 
+      };
+
+      const dataStyle = {
+        font: { sz: 12, name: "Arial" }, // Increased size
+        alignment: { horizontal: "center", vertical: "center" },
+        border: borderStyle,
+        fill: { fgColor: { rgb: "FFFFFF" } }
+      };
+      
+      const boldDataStyle = {
+         ...dataStyle,
+         font: { sz: 12, name: "Arial", bold: true } // Increased size
+      };
+
+      // Colors approx matching Tailwind classes
+      const weekColors = ["FFF7ED", "FFFBEB", "FFF1F2", "EFF6FF"];
+
+      // -- DATA CONSTRUCTION --
+      
+      // Header Info Rows
+      const wsData: any[][] = [
+          [{ v: "DAILY TIME RECORD", s: titleStyle }],
+          [], // Spacer
+          [
+              { v: "Employee:", s: labelStyle }, 
+              { v: userInfo.name, s: valueStyle },
+              null,
+              { v: "Office:", s: labelStyle },
+              { v: userInfo.office, s: valueStyle }
+          ],
+          [
+              { v: "Target Hours:", s: labelStyle },
+              { v: targetHours, s: { ...valueStyle, alignment: { horizontal: "left" } } } // Override alignment
+          ],
+          [] // Spacer
+      ];
+
+      // Table Header Rows (Row 5 & 6)
+      const headerRow1 = [
+          { v: "WEEK", s: headerStyle },
+          { v: "DATE", s: headerStyle },
+          { v: "AM", s: headerStyle },
+          { v: "", s: headerStyle }, // Merged
+          { v: "PM", s: headerStyle },
+          { v: "", s: headerStyle }, // Merged
+          { v: "DAILY HRS", s: headerStyle },
+          { v: "WEEKLY HRS", s: headerStyle },
+          { v: "REMAINING", s: headerStyle }
+      ];
+
+      const headerRow2 = [
+          { v: "", s: headerStyle }, // Merged
+          { v: "", s: headerStyle }, // Merged
+          { v: "IN", s: headerStyle },
+          { v: "OUT", s: headerStyle },
+          { v: "IN", s: headerStyle },
+          { v: "OUT", s: headerStyle },
+          { v: "", s: headerStyle }, // Merged
+          { v: "", s: headerStyle }, // Merged
+          { v: "", s: headerStyle }  // Merged
+      ];
+
+      wsData.push(headerRow1, headerRow2);
+
+      // Merges
+      const merges = [
+          // Title
+          { s: { r: 0, c: 0 }, e: { r: 0, c: 8 } },
+          // Headers
+          { s: { r: 5, c: 0 }, e: { r: 6, c: 0 } }, // Week
+          { s: { r: 5, c: 1 }, e: { r: 6, c: 1 } }, // Date
+          { s: { r: 5, c: 2 }, e: { r: 5, c: 3 } }, // AM
+          { s: { r: 5, c: 4 }, e: { r: 5, c: 5 } }, // PM
+          { s: { r: 5, c: 6 }, e: { r: 6, c: 6 } }, // Daily
+          { s: { r: 5, c: 7 }, e: { r: 6, c: 7 } }, // Weekly
+          { s: { r: 5, c: 8 }, e: { r: 6, c: 8 } }, // Remaining
+      ];
+
+      // Data Rows logic
+      let currentRemaining = targetHours;
+      const dataStartRow = 7;
+      let currentRow = dataStartRow;
+
+      for (let i = 0; i < entries.length; i += 5) {
+          const weekEntries = entries.slice(i, i + 5);
+          const weekIndex = Math.floor(i / 5);
+          const color = weekColors[weekIndex % weekColors.length];
           
-          let isOvertime = false;
-          const totalRef = XLSX.utils.encode_cell({r: R, c: 7});
-          if (ws[totalRef] && typeof ws[totalRef].v === 'number' && ws[totalRef].v > 8) {
-              isOvertime = true;
-          }
+          // Style for this week
+          const weekCellStyle = {
+              ...dataStyle,
+              fill: { fgColor: { rgb: color } }
+          };
+          const weekBoldCellStyle = {
+              ...boldDataStyle,
+              fill: { fgColor: { rgb: color } }
+          };
 
-          for(let C = 0; C <= 9; C++) {
-              const cellRef = XLSX.utils.encode_cell({r: R, c: C});
-              if(!ws[cellRef]) ws[cellRef] = { v: "", t: "s" };
+          // Calculate stats first to get weekly total
+          let weekTotal = 0;
+          weekEntries.forEach(e => {
+             const s = calculateDailyHours(e);
+             weekTotal += s.dailyTotalCredited;
+          });
 
-              if (C === 0) {
-                  // Date
-                  ws[cellRef].s = getDataStyle("left", true, isOdd, false);
-              } else if (C === 7) {
-                  // Total Hours (Bold)
-                  ws[cellRef].s = getDataStyle("center", true, isOdd, false); // Bold total actual
-              } else if (C === 8 && isOvertime) {
-                  // Credited Hours Warning
-                  ws[cellRef].s = getDataStyle("center", true, isOdd, true);
-              } else if (C === 9) {
-                  // Notes
-                  ws[cellRef].s = getDataStyle("left", false, isOdd, false);
-              } else {
-                  // Normal Times
-                  ws[cellRef].s = getDataStyle("center", false, isOdd, false);
-              }
-          }
+          // Add merge for "Week" and "Weekly Total" columns
+          merges.push({ s: { r: currentRow, c: 0 }, e: { r: currentRow + 4, c: 0 } });
+          merges.push({ s: { r: currentRow, c: 7 }, e: { r: currentRow + 4, c: 7 } });
+
+          weekEntries.forEach((e, idx) => {
+              const stats = calculateDailyHours(e);
+              currentRemaining -= stats.dailyTotalCredited;
+
+              const row = [
+                  // Col 0: Week (Only first row has value, others merged but style applied)
+                  { v: idx === 0 ? `WEEK ${weekIndex + 1}` : "", s: weekBoldCellStyle },
+                  // Col 1: Date
+                  { v: e.date, s: { ...weekCellStyle, font: { ...weekCellStyle.font, bold: true } } },
+                  // Col 2-5: Times
+                  { v: e.morningIn, s: { ...dataStyle, fill: { fgColor: { rgb: "FFFFFF" } } } },
+                  { v: e.morningOut, s: { ...dataStyle, fill: { fgColor: { rgb: "FFFFFF" } } } },
+                  { v: e.afternoonIn, s: { ...dataStyle, fill: { fgColor: { rgb: "FFFFFF" } } } },
+                  { v: e.afternoonOut, s: { ...dataStyle, fill: { fgColor: { rgb: "FFFFFF" } } } },
+                  // Col 6: Daily Total
+                  { v: stats.dailyTotalCredited > 0 ? stats.dailyTotalCredited.toFixed(2) : "", s: weekBoldCellStyle },
+                  // Col 7: Weekly Total (Only first row has value)
+                  { v: idx === 0 ? weekTotal.toFixed(2) : "", s: weekBoldCellStyle },
+                  // Col 8: Remaining
+                  { v: currentRemaining.toFixed(2), s: { ...boldDataStyle, fill: { fgColor: { rgb: "FFFFFF" } } } },
+              ];
+              wsData.push(row);
+          });
+          currentRow += 5;
       }
+      
+      // Footer Total
+      const finalTotal = entries.reduce((acc, curr) => acc + calculateDailyHours(curr).dailyTotalCredited, 0);
+      const totalRowIndex = currentRow;
+      
+      const footerLabelStyle = {
+          font: { bold: true, sz: 14, name: "Arial" }, // Increased size
+          alignment: { horizontal: "right", vertical: "center" },
+          border: borderStyle,
+          fill: { fgColor: { rgb: "FFFFFF" } }
+      };
+      
+      const footerValueStyle = {
+          font: { bold: true, sz: 16, name: "Arial" }, // Increased size
+          alignment: { horizontal: "center", vertical: "center" },
+          border: borderStyle,
+          fill: { fgColor: { rgb: "FFFFFF" } }
+      };
 
-      // 5. Apply Summary Styles
-      const startSummaryRow = lastDataRowIndex + 2;
-
-      // Row: Total Actual
-      const labelActual = XLSX.utils.encode_cell({r: startSummaryRow, c: 6});
-      const valActual = XLSX.utils.encode_cell({r: startSummaryRow, c: 7});
-      if(ws[labelActual]) ws[labelActual].s = styleSummaryLabel;
-      if(ws[valActual]) ws[valActual].s = styleSummaryValue;
-
-      // Row: Total Credited
-      const labelCredited = XLSX.utils.encode_cell({r: startSummaryRow + 1, c: 6});
-      const valCredited = XLSX.utils.encode_cell({r: startSummaryRow + 1, c: 7});
-      if(ws[labelCredited]) ws[labelCredited].s = styleSummaryLabel;
-      if(ws[valCredited]) ws[valCredited].s = styleSummaryValue;
-
-      // Row: Final
-      const labelFinal = XLSX.utils.encode_cell({r: startSummaryRow + 2, c: 6});
-      const valFinal = XLSX.utils.encode_cell({r: startSummaryRow + 2, c: 7});
-      if(ws[labelFinal]) ws[labelFinal].s = styleSummaryLabel;
-      if(ws[valFinal]) ws[valFinal].s = styleFinalValue;
-
-      // Row Heights (hpt)
-      ws['!rows'] = [
-          { hpt: 45 }, // Title
-          { hpt: 15 }, // Spacer
-          { hpt: 25 }, // Name
-          { hpt: 25 }, // Office
-          { hpt: 15 }, // Spacer
-          { hpt: 30 }, // Header
+      const totalRow = [
+          { v: "TOTAL NO. OF HOURS", s: footerLabelStyle },
+          { v: "", s: footerLabelStyle },
+          { v: "", s: footerLabelStyle },
+          { v: "", s: footerLabelStyle },
+          { v: "", s: footerLabelStyle },
+          { v: "", s: footerLabelStyle },
+          { v: "", s: footerLabelStyle }, // Merged up to here
+          { v: finalTotal.toFixed(2), s: footerValueStyle },
+          { v: "", s: dataStyle }
       ];
-      // Add dynamic row heights for data
-      for (let i = 0; i < dataRows.length; i++) {
-        ws['!rows'].push({ hpt: 25 });
-      }
-      // Add spacer and summary row heights
-      ws['!rows'].push({ hpt: 20 }); // Spacer
-      ws['!rows'].push({ hpt: 15 }); // Spacer
-      ws['!rows'].push({ hpt: 30 }); // Summary 1
-      ws['!rows'].push({ hpt: 30 }); // Summary 2
-      ws['!rows'].push({ hpt: 30 }); // Summary 3
+      wsData.push(totalRow);
+      merges.push({ s: { r: totalRowIndex, c: 0 }, e: { r: totalRowIndex, c: 6 } });
 
-      // Column Widths
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+      ws['!merges'] = merges;
+      
+      // Column Widths - Increased widths
       ws['!cols'] = [
-        { wch: 22 }, // Date
-        { wch: 14 }, // AM In
-        { wch: 14 }, // AM Out
-        { wch: 14 }, // PM In
-        { wch: 14 }, // PM Out
-        { wch: 12 }, // AM Hrs
-        { wch: 12 }, // PM Hrs
-        { wch: 15 }, // Total
-        { wch: 18 }, // Credited
-        { wch: 40 }  // Notes
+          { wch: 15 }, // Week
+          { wch: 20 }, // Date
+          { wch: 12 }, // AM In
+          { wch: 12 }, // AM Out
+          { wch: 12 }, // PM In
+          { wch: 12 }, // PM Out
+          { wch: 15 }, // Daily
+          { wch: 15 }, // Weekly
+          { wch: 15 }, // Remaining
       ];
 
-      XLSX.utils.book_append_sheet(wb, ws, "Timesheet");
-
-      const fileName = userInfo.name ? `${userInfo.name.replace(/\s+/g, '_')}_DTR.xlsx` : "Timesheet.xlsx";
-      XLSX.writeFile(wb, fileName);
+      XLSX.utils.book_append_sheet(wb, ws, "DTR");
+      XLSX.writeFile(wb, `DTR_${userInfo.name ? userInfo.name.replace(/\s+/g, '_') : 'Export'}.xlsx`);
   };
 
   return (
-    <div className="min-h-screen bg-gray-50/50 pb-20">
+    <div className="min-h-screen bg-white pb-20">
+      <input type="file" ref={fileInputRef} onChange={handleFileChange} accept=".json" className="hidden" />
+
       {/* Header */}
-      <header className="bg-white border-b border-gray-200 sticky top-0 z-20">
+      <header className="bg-indigo-900 text-white border-b border-gray-200 sticky top-0 z-20 shadow-md">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
+          <div className="flex flex-col sm:flex-row justify-between items-center h-auto sm:h-16 py-3 sm:py-0 gap-3 sm:gap-0">
             <div className="flex items-center gap-3">
-              <div className="bg-indigo-600 p-2 rounded-lg">
-                <CalendarDaysIcon className="h-6 w-6 text-white" />
-              </div>
+              <CalendarDaysIcon className="h-6 w-6 text-white" />
               <div>
-                 <h1 className="text-xl font-bold text-gray-900 tracking-tight">Smart DTR</h1>
-                 <p className="text-xs text-gray-500">Weekly Attendance Record</p>
+                 <h1 className="text-xl font-bold tracking-tight">Smart Excel DTR</h1>
               </div>
             </div>
-            <div className="flex items-center gap-3">
-                {isNewWeek && (
-                  <span className="text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-full font-medium animate-pulse">
-                     New Week Started
-                  </span>
-                )}
-                <button 
-                    onClick={handleReset}
-                    className="text-sm text-gray-500 hover:text-red-600 px-3 py-2 transition-colors"
-                >
-                    Reset Week
+            <div className="flex flex-wrap items-center gap-2">
+                <button onClick={handleReset} className="text-sm text-gray-300 hover:text-white px-3 py-2 transition-colors">
+                    Reset
                 </button>
-                <button 
-                    onClick={exportToExcel}
-                    className="inline-flex items-center gap-2 bg-white border border-gray-300 text-gray-700 hover:bg-gray-50 px-4 py-2 rounded-md text-sm font-medium transition-colors shadow-sm"
-                >
-                    <DocumentArrowDownIcon className="h-4 w-4" />
+                <div className="h-4 w-px bg-gray-600 mx-1 hidden sm:block"></div>
+                <button onClick={saveBackup} className="text-sm text-gray-300 hover:text-white px-3 py-2" title="Save Backup">
+                    Backup
+                </button>
+                <button onClick={loadBackup} className="text-sm text-gray-300 hover:text-white px-3 py-2" title="Load Backup">
+                    Restore
+                </button>
+                <div className="h-4 w-px bg-gray-600 mx-1 hidden sm:block"></div>
+                <button onClick={exportToExcel} className="bg-green-600 hover:bg-green-700 text-white px-4 py-1.5 rounded text-sm font-medium transition-colors shadow-sm">
                     Export Excel
                 </button>
             </div>
@@ -359,68 +413,53 @@ const App: React.FC = () => {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
-            {/* Main Content Area */}
-            <div className="lg:col-span-4 space-y-6">
-                
-                {/* Employee Information Section */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                    <h2 className="text-base font-semibold text-gray-900 mb-4">Employee Information</h2>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Employee Name</label>
-                            <div className="relative rounded-md shadow-sm">
-                                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                                    <UserIcon className="h-5 w-5 text-gray-400" aria-hidden="true" />
-                                </div>
-                                <input
-                                    type="text"
-                                    value={userInfo.name}
-                                    onChange={(e) => setUserInfo({...userInfo, name: e.target.value})}
-                                    className="block w-full rounded-md border border-gray-300 pl-10 focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm py-2"
-                                    placeholder="Enter your full name"
-                                />
-                            </div>
-                        </div>
-                        <div>
-                            <label className="block text-sm font-medium text-gray-700 mb-1">Office / Department</label>
-                            <div className="relative rounded-md shadow-sm">
-                                <div className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3">
-                                    <BuildingOfficeIcon className="h-5 w-5 text-gray-400" aria-hidden="true" />
-                                </div>
-                                <input
-                                    type="text"
-                                    value={userInfo.office}
-                                    onChange={(e) => setUserInfo({...userInfo, office: e.target.value})}
-                                    className="block w-full rounded-md border border-gray-300 pl-10 focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm py-2"
-                                    placeholder="e.g. IT Department"
-                                />
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <SmartEntry 
-                  currentDate={entries[0]?.date || new Date().toISOString().split('T')[0]} 
-                  onEntriesParsed={handleSmartFill} 
-                />
-
-                {/* Timesheet Table */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden">
-                    <div className="p-4 border-b border-gray-200 flex justify-between items-center bg-gray-50">
-                        <h2 className="text-base font-semibold text-gray-900">Time Entries</h2>
-                        <span className="text-xs text-gray-500 bg-gray-200 px-2 py-1 rounded">Week of {entries[0]?.date}</span>
-                    </div>
-                    <Timesheet 
-                        entries={entries} 
-                        onUpdateEntry={handleUpdateEntry} 
-                        onClearEntry={handleClearEntry}
+        <div className="space-y-6">
+            
+            {/* Controls */}
+            <div className="bg-gray-50 rounded-lg p-6 border border-gray-200 grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Employee Name</label>
+                    <input
+                        type="text"
+                        value={userInfo.name}
+                        onChange={(e) => setUserInfo({...userInfo, name: e.target.value})}
+                        className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        placeholder="Name"
                     />
                 </div>
-
-                {/* Summary Section */}
-                <Summary entries={entries} />
+                <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Office</label>
+                    <input
+                        type="text"
+                        value={userInfo.office}
+                        onChange={(e) => setUserInfo({...userInfo, office: e.target.value})}
+                        className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                        placeholder="Department"
+                    />
+                </div>
+                 <div>
+                    <label className="block text-xs font-bold text-gray-500 uppercase mb-1">Target Hours (Total)</label>
+                    <input
+                        type="number"
+                        value={targetHours}
+                        onChange={(e) => setTargetHours(Number(e.target.value))}
+                        className="block w-full border-gray-300 rounded-md shadow-sm focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm"
+                    />
+                </div>
             </div>
+
+            <SmartEntry 
+              currentDate={entries[0]?.date || new Date().toISOString().split('T')[0]} 
+              onEntriesParsed={handleSmartFill} 
+            />
+
+            {/* Timesheet Table */}
+            <Timesheet 
+                entries={entries} 
+                targetHours={targetHours}
+                onUpdateEntry={handleUpdateEntry} 
+                onClearEntry={handleClearEntry}
+            />
         </div>
       </main>
     </div>

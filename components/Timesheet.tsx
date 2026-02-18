@@ -5,209 +5,283 @@ import { ExclamationCircleIcon, TrashIcon, ClockIcon } from '@heroicons/react/24
 
 interface TimesheetProps {
   entries: TimeEntry[];
+  targetHours: number;
   onUpdateEntry: (id: string, field: keyof TimeEntry, value: string) => void;
   onClearEntry: (id: string) => void;
 }
 
-const Timesheet: React.FC<TimesheetProps> = ({ entries, onUpdateEntry, onClearEntry }) => {
+const Timesheet: React.FC<TimesheetProps> = ({ entries, targetHours, onUpdateEntry, onClearEntry }) => {
   
-  // Calculate stats for each row to display
-  const rowStats: Record<string, CalculatedHours> = useMemo(() => {
-    const stats: Record<string, CalculatedHours> = {};
-    entries.forEach(entry => {
-      stats[entry.id] = calculateDailyHours(entry);
+  // 1. Calculate stats for every row
+  const calculations = useMemo(() => {
+    let currentRemaining = targetHours;
+    
+    return entries.map(entry => {
+        const stats = calculateDailyHours(entry);
+        // Subtract credited hours (capped at 8) from remaining
+        currentRemaining = currentRemaining - stats.dailyTotalCredited;
+        
+        return {
+            ...stats,
+            remainingAfter: currentRemaining
+        };
     });
-    return stats;
-  }, [entries]);
+  }, [entries, targetHours]);
+
+  // 2. Group entries by week (chunks of 5)
+  const weeks = useMemo(() => {
+      const chunks = [];
+      for (let i = 0; i < entries.length; i += 5) {
+          const weekEntries = entries.slice(i, i + 5);
+          const weekStats = calculations.slice(i, i + 5);
+          
+          // Calculate weekly total
+          const weeklyTotalCredited = weekStats.reduce((sum, stat) => sum + stat.dailyTotalCredited, 0);
+
+          chunks.push({
+              entries: weekEntries,
+              stats: weekStats,
+              weeklyTotalCredited
+          });
+      }
+      return chunks;
+  }, [entries, calculations]);
 
   const handleSetTime = (id: string, field: keyof TimeEntry) => {
-    // Automatically set Afternoon Out to 5:00 PM (17:00)
+    // Automatic fixed times
+    if (field === 'morningOut') {
+      onUpdateEntry(id, field, '12:00');
+      return;
+    }
+    if (field === 'afternoonIn') {
+      onUpdateEntry(id, field, '13:00');
+      return;
+    }
     if (field === 'afternoonOut') {
       onUpdateEntry(id, field, '17:00');
       return;
     }
 
-    // For other fields, use the current time
+    // For other fields (Morning In), use the current time
     const now = new Date();
     const hours = String(now.getHours()).padStart(2, '0');
     const minutes = String(now.getMinutes()).padStart(2, '0');
     onUpdateEntry(id, field, `${hours}:${minutes}`);
   };
 
+  const weekColors = [
+      'bg-orange-100/50', // Week 1 - Yellowish
+      'bg-amber-100/50',  // Week 2 - Orangey
+      'bg-rose-100/50',   // Week 3 - Reddish
+      'bg-blue-100/50',   // Week 4 - Blueish
+  ];
+
   return (
-    <div className="overflow-x-auto rounded-lg border border-gray-300 shadow-sm bg-white">
-      <table className="min-w-full divide-y divide-gray-300">
-        <thead className="bg-gray-50">
-          <tr>
-            <th scope="col" className="py-3.5 pl-4 pr-3 text-left text-xs font-semibold text-gray-900 sm:pl-6 sticky left-0 bg-gray-50 z-10 shadow-r">
-              Date
-            </th>
-            <th scope="col" className="px-3 py-3.5 text-center text-xs font-semibold text-gray-900 bg-blue-50/50 border-l border-gray-200">
-              Morning In
-            </th>
-            <th scope="col" className="px-3 py-3.5 text-center text-xs font-semibold text-gray-900 bg-blue-50/50">
-              Morning Out
-            </th>
-            <th scope="col" className="px-3 py-3.5 text-center text-xs font-semibold text-gray-900 bg-amber-50/50 border-l border-gray-200">
-              Afternoon In
-            </th>
-            <th scope="col" className="px-3 py-3.5 text-center text-xs font-semibold text-gray-900 bg-amber-50/50">
-              Afternoon Out
-            </th>
-            <th scope="col" className="px-3 py-3.5 text-right text-xs font-semibold text-gray-900 border-l border-gray-200 w-24">
-              AM Hours
-            </th>
-            <th scope="col" className="px-3 py-3.5 text-right text-xs font-semibold text-gray-900 w-24">
-              PM Hours
-            </th>
-            <th scope="col" className="px-3 py-3.5 text-right text-xs font-bold text-indigo-900 bg-indigo-50 border-l border-indigo-100 w-28">
-              Daily Total
-            </th>
-            <th scope="col" className="px-3 py-3.5 text-left text-xs font-semibold text-gray-900 border-l border-gray-200 min-w-[200px]">
-              Notes
-            </th>
-            <th scope="col" className="px-3 py-3.5 text-center text-xs font-semibold text-gray-900 w-16">
-              Actions
-            </th>
-          </tr>
+    <div className="overflow-x-auto rounded-none border border-black shadow-sm bg-white">
+      <table className="min-w-full border-collapse">
+        {/* Custom Header matching the image */}
+        <thead>
+            <tr className="bg-white">
+                <th colSpan={2} className="border border-black px-2 py-1 text-left text-xs font-bold text-black uppercase">
+                    NO. OF HRS
+                </th>
+                <th className="border border-black px-2 py-1 text-left text-sm font-bold text-black">
+                    {targetHours}
+                </th>
+                {/* Spans remaining columns including new action column */}
+                <th colSpan={7} className="border border-black bg-white"></th>
+            </tr>
+            <tr className="bg-white">
+                <th rowSpan={2} className="w-24 border border-black text-center text-xs font-bold text-black uppercase bg-white">
+                    WEEK
+                </th>
+                 <th rowSpan={2} className="w-32 border border-black text-center text-xs font-bold text-black uppercase bg-white">
+                    DATE
+                </th>
+                <th colSpan={2} className="border border-black py-2 text-center text-xs font-bold text-black uppercase">
+                    AM
+                </th>
+                <th colSpan={2} className="border border-black py-2 text-center text-xs font-bold text-black uppercase">
+                    PM
+                </th>
+                <th rowSpan={2} className="w-16 border border-black px-1 text-center text-[10px] font-bold text-black uppercase leading-tight">
+                    NO. OF HOURS
+                </th>
+                <th rowSpan={2} className="w-24 border border-black px-1 text-center text-[10px] font-bold text-black uppercase leading-tight bg-yellow-50">
+                    NO. OF HOURS RENDERED PER WEEK
+                </th>
+                <th rowSpan={2} className="w-24 border border-black px-1 text-center text-[10px] font-bold text-black uppercase leading-tight">
+                    NO. OF HOURS REMAIN
+                </th>
+                <th rowSpan={2} className="w-10 border border-black px-1 text-center text-[10px] font-bold text-black uppercase leading-tight">
+                    {/* Action */}
+                </th>
+            </tr>
+            <tr className="bg-white">
+                <th className="border border-black px-1 py-1 text-center text-[10px] font-bold text-black uppercase w-20">
+                    TIME IN
+                </th>
+                <th className="border border-black px-1 py-1 text-center text-[10px] font-bold text-black uppercase w-20">
+                    TIME OUT
+                </th>
+                <th className="border border-black px-1 py-1 text-center text-[10px] font-bold text-black uppercase w-20">
+                    TIME IN
+                </th>
+                <th className="border border-black px-1 py-1 text-center text-[10px] font-bold text-black uppercase w-20">
+                    TIME OUT
+                </th>
+            </tr>
         </thead>
-        <tbody className="divide-y divide-gray-200 bg-white">
-          {entries.map((entry) => {
-            const stats = rowStats[entry.id];
-            const hasError = !stats.isValid;
-            const isWeekend = new Date(entry.date).getDay() % 6 === 0;
+        
+        <tbody className="text-sm">
+          {weeks.map((week, weekIndex) => (
+            <React.Fragment key={weekIndex}>
+                {week.entries.map((entry, entryIndex) => {
+                    const stats = week.stats[entryIndex];
+                    const isFirstRow = entryIndex === 0;
+                    const weekColor = weekColors[weekIndex % weekColors.length];
 
-            return (
-              <tr key={entry.id} className={`${isWeekend ? 'bg-gray-50' : 'hover:bg-gray-50'} transition-colors group`}>
-                <td className="whitespace-nowrap py-3 pl-4 pr-3 text-sm font-medium text-gray-900 sm:pl-6 sticky left-0 bg-white group-hover:bg-gray-50 z-10 border-r border-transparent shadow-[1px_0_0_0_rgba(0,0,0,0.05)]">
-                  {new Date(entry.date).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
-                  {hasError && (
-                     <div className="group/tooltip relative inline-block ml-2 align-middle">
-                       <ExclamationCircleIcon className="h-4 w-4 text-red-500" />
-                       <div className="absolute left-0 bottom-full mb-2 hidden w-48 rounded bg-red-800 p-2 text-xs text-white group-hover/tooltip:block z-50">
-                          {stats.errors.join(", ")}
-                       </div>
-                     </div>
-                  )}
-                </td>
-                
-                {/* Morning Inputs */}
-                <td className="whitespace-nowrap px-2 py-2 border-l border-gray-200">
-                  {entry.morningIn ? (
-                    <input
-                      type="time"
-                      value={entry.morningIn}
-                      onChange={(e) => onUpdateEntry(entry.id, 'morningIn', e.target.value)}
-                      className="block w-full rounded-md border-gray-300 py-1.5 text-gray-900 bg-white shadow-sm focus:ring-2 focus:ring-indigo-600 sm:text-sm text-center font-medium"
-                    />
-                  ) : (
-                    <button
-                      onClick={() => handleSetTime(entry.id, 'morningIn')}
-                      className="w-full bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 border border-blue-200 py-1.5 rounded-md text-xs font-semibold transition-colors shadow-sm flex items-center justify-center gap-1"
-                    >
-                      <ClockIcon className="w-3 h-3" />
-                      <span>Time In</span>
-                    </button>
-                  )}
-                </td>
-                <td className="whitespace-nowrap px-2 py-2">
-                  {entry.morningOut ? (
-                    <input
-                      type="time"
-                      value={entry.morningOut}
-                      onChange={(e) => onUpdateEntry(entry.id, 'morningOut', e.target.value)}
-                      className="block w-full rounded-md border-gray-300 py-1.5 text-gray-900 bg-white shadow-sm focus:ring-2 focus:ring-indigo-600 sm:text-sm text-center font-medium"
-                    />
-                  ) : (
-                    <button
-                      onClick={() => handleSetTime(entry.id, 'morningOut')}
-                      className="w-full bg-blue-50 hover:bg-blue-100 text-blue-600 hover:text-blue-700 border border-blue-200 py-1.5 rounded-md text-xs font-semibold transition-colors shadow-sm flex items-center justify-center gap-1"
-                    >
-                      <ClockIcon className="w-3 h-3" />
-                      <span>Time Out</span>
-                    </button>
-                  )}
-                </td>
+                    return (
+                        <tr key={entry.id} className="hover:bg-gray-50">
+                            {/* Week Label - Rowspan 5 */}
+                            {isFirstRow && (
+                                <td rowSpan={5} className={`border border-black text-center text-xs font-bold text-black ${weekColor}`}>
+                                    WEEK {weekIndex + 1}
+                                </td>
+                            )}
 
-                {/* Afternoon Inputs */}
-                <td className="whitespace-nowrap px-2 py-2 border-l border-gray-200">
-                  {entry.afternoonIn ? (
-                    <input
-                      type="time"
-                      value={entry.afternoonIn}
-                      onChange={(e) => onUpdateEntry(entry.id, 'afternoonIn', e.target.value)}
-                      className="block w-full rounded-md border-gray-300 py-1.5 text-gray-900 bg-white shadow-sm focus:ring-2 focus:ring-indigo-600 sm:text-sm text-center font-medium"
-                    />
-                  ) : (
-                    <button
-                      onClick={() => handleSetTime(entry.id, 'afternoonIn')}
-                      className="w-full bg-amber-50 hover:bg-amber-100 text-amber-700 hover:text-amber-800 border border-amber-200 py-1.5 rounded-md text-xs font-semibold transition-colors shadow-sm flex items-center justify-center gap-1"
-                    >
-                      <ClockIcon className="w-3 h-3" />
-                      <span>Time In</span>
-                    </button>
-                  )}
-                </td>
-                <td className="whitespace-nowrap px-2 py-2">
-                  {entry.afternoonOut ? (
-                    <input
-                      type="time"
-                      value={entry.afternoonOut}
-                      onChange={(e) => onUpdateEntry(entry.id, 'afternoonOut', e.target.value)}
-                      className="block w-full rounded-md border-gray-300 py-1.5 text-gray-900 bg-white shadow-sm focus:ring-2 focus:ring-indigo-600 sm:text-sm text-center font-medium"
-                    />
-                  ) : (
-                    <button
-                      onClick={() => handleSetTime(entry.id, 'afternoonOut')}
-                      className="w-full bg-amber-50 hover:bg-amber-100 text-amber-700 hover:text-amber-800 border border-amber-200 py-1.5 rounded-md text-xs font-semibold transition-colors shadow-sm flex items-center justify-center gap-1"
-                    >
-                      <ClockIcon className="w-3 h-3" />
-                      <span>Time Out</span>
-                    </button>
-                  )}
-                </td>
+                            {/* Date */}
+                            <td className="border border-black px-2 py-1 text-xs text-center font-bold text-gray-900 whitespace-nowrap bg-white">
+                                {new Date(entry.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+                            </td>
 
-                {/* Calculations */}
-                <td className="whitespace-nowrap px-3 py-2 text-right text-sm text-gray-500 border-l border-gray-200">
-                  {formatDecimalHours(stats.morningHours)}
-                </td>
-                <td className="whitespace-nowrap px-3 py-2 text-right text-sm text-gray-500">
-                  {formatDecimalHours(stats.afternoonHours)}
-                </td>
-                <td className={`whitespace-nowrap px-3 py-2 text-right text-sm font-medium border-l border-indigo-100 ${stats.dailyTotalActual > 8 ? 'text-amber-600' : 'text-indigo-900'}`}>
-                  {formatDecimalHours(stats.dailyTotalActual)}
-                  {stats.dailyTotalActual > 8 && (
-                     <span className="text-[10px] text-gray-400 block leading-tight">Cap: 8.00</span>
-                  )}
-                </td>
+                            {/* AM IN */}
+                            <td className="border border-black px-1 py-1 bg-white h-8">
+                                {entry.morningIn ? (
+                                    <input
+                                    type="time"
+                                    value={entry.morningIn}
+                                    onChange={(e) => onUpdateEntry(entry.id, 'morningIn', e.target.value)}
+                                    className="w-full h-full text-center text-xs border-0 p-0 focus:ring-0 bg-white text-gray-900 font-medium"
+                                    />
+                                ) : (
+                                    <button 
+                                      onClick={() => handleSetTime(entry.id, 'morningIn')} 
+                                      className="w-full h-full text-[10px] text-blue-600/50 hover:text-blue-600 hover:bg-blue-50 transition-colors flex items-center justify-center font-medium"
+                                    >
+                                        Time In
+                                    </button>
+                                )}
+                            </td>
 
-                {/* Notes Input */}
-                <td className="px-2 py-2 border-l border-gray-200">
-                   <input
-                      type="text"
-                      value={entry.notes || ''}
-                      onChange={(e) => onUpdateEntry(entry.id, 'notes', e.target.value)}
-                      placeholder="Task details..."
-                      className="block w-full rounded-md border-gray-300 py-1.5 text-gray-900 bg-white shadow-sm focus:ring-2 focus:ring-indigo-600 sm:text-xs"
-                   />
-                </td>
+                            {/* AM OUT */}
+                            <td className="border border-black px-1 py-1 bg-white h-8">
+                                {entry.morningOut ? (
+                                    <input
+                                    type="time"
+                                    value={entry.morningOut}
+                                    onChange={(e) => onUpdateEntry(entry.id, 'morningOut', e.target.value)}
+                                    className="w-full h-full text-center text-xs border-0 p-0 focus:ring-0 bg-white text-gray-900 font-medium"
+                                    />
+                                ) : (
+                                    <button 
+                                      onClick={() => handleSetTime(entry.id, 'morningOut')} 
+                                      className="w-full h-full text-[10px] text-blue-600/50 hover:text-blue-600 hover:bg-blue-50 transition-colors flex items-center justify-center font-medium"
+                                    >
+                                        Time Out
+                                    </button>
+                                )}
+                            </td>
 
-                <td className="whitespace-nowrap px-3 py-2 text-center">
-                    <button 
-                        onClick={() => onClearEntry(entry.id)}
-                        className="text-gray-400 hover:text-red-500 transition-colors p-1"
-                        title="Clear Row"
-                    >
-                        <TrashIcon className="h-4 w-4" />
-                    </button>
-                </td>
-              </tr>
-            );
-          })}
+                            {/* PM IN */}
+                            <td className="border border-black px-1 py-1 bg-white h-8">
+                                {entry.afternoonIn ? (
+                                    <input
+                                    type="time"
+                                    value={entry.afternoonIn}
+                                    onChange={(e) => onUpdateEntry(entry.id, 'afternoonIn', e.target.value)}
+                                    className="w-full h-full text-center text-xs border-0 p-0 focus:ring-0 bg-white text-gray-900 font-medium"
+                                    />
+                                ) : (
+                                    <button 
+                                      onClick={() => handleSetTime(entry.id, 'afternoonIn')} 
+                                      className="w-full h-full text-[10px] text-amber-600/50 hover:text-amber-600 hover:bg-amber-50 transition-colors flex items-center justify-center font-medium"
+                                    >
+                                        Time In
+                                    </button>
+                                )}
+                            </td>
+
+                            {/* PM OUT */}
+                            <td className="border border-black px-1 py-1 bg-white h-8">
+                                {entry.afternoonOut ? (
+                                    <input
+                                    type="time"
+                                    value={entry.afternoonOut}
+                                    onChange={(e) => onUpdateEntry(entry.id, 'afternoonOut', e.target.value)}
+                                    className="w-full h-full text-center text-xs border-0 p-0 focus:ring-0 bg-white text-gray-900 font-medium"
+                                    />
+                                ) : (
+                                    <button 
+                                      onClick={() => handleSetTime(entry.id, 'afternoonOut')} 
+                                      className="w-full h-full text-[10px] text-amber-600/50 hover:text-amber-600 hover:bg-amber-50 transition-colors flex items-center justify-center font-medium"
+                                    >
+                                        Time Out
+                                    </button>
+                                )}
+                            </td>
+
+                            {/* Daily Total */}
+                            <td className={`border border-black px-2 py-1 text-center text-xs font-bold text-black ${weekColor}`}>
+                                {formatDecimalHours(stats.dailyTotalCredited)}
+                            </td>
+
+                            {/* Weekly Total - Rowspan 5 */}
+                            {isFirstRow && (
+                                <td rowSpan={5} className={`border border-black text-center text-sm font-bold text-black ${weekColor}`}>
+                                    {formatDecimalHours(week.weeklyTotalCredited)}
+                                </td>
+                            )}
+
+                            {/* Remaining Hours */}
+                            <td className="border border-black px-2 py-1 text-center text-xs font-bold text-black bg-white">
+                                {formatDecimalHours(stats.remainingAfter)}
+                            </td>
+
+                            {/* Action Button */}
+                            <td className="border border-black px-1 py-1 text-center bg-white">
+                                <button 
+                                    onClick={() => onClearEntry(entry.id)}
+                                    className="text-gray-400 hover:text-red-600 transition-colors p-1 rounded hover:bg-red-50"
+                                    title="Reset row"
+                                >
+                                    <TrashIcon className="h-4 w-4" />
+                                </button>
+                            </td>
+                        </tr>
+                    );
+                })}
+            </React.Fragment>
+          ))}
+          
+          {/* Total Footer Row */}
+          <tr>
+              <td colSpan={7} className="border border-black px-4 py-2 text-right font-bold text-sm uppercase text-black">
+                  TOTAL NO. OF HOURS
+              </td>
+              <td className="border border-black px-4 py-2 text-center font-bold text-lg text-black bg-white">
+                  {formatDecimalHours(calculations.reduce((sum, s) => sum + s.dailyTotalCredited, 0))}
+              </td>
+              {/* Cover Remaining + Action columns */}
+              <td colSpan={2} className="border border-black bg-gray-100"></td>
+          </tr>
         </tbody>
       </table>
     </div>
   );
 };
+
+// Helper to check if entry has any data
+const entryHasData = (e: TimeEntry) => !!(e.morningIn || e.morningOut || e.afternoonIn || e.afternoonOut);
 
 export default Timesheet;
